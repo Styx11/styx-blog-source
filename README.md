@@ -9,5 +9,17 @@
 
 当然你也可以参与纠错😄
 
+## 📦Build
+```shell
+# install dependencies
+npm install
+
+# build for blog asset on vuepress
+npm run docs:build
+
+# start vuepress blog dev mode in localhost:8080
+npm run docs:dev
+```
+
 ## 📄License
 MIT.
