@@ -1,0 +1,20 @@
+{
+  "name": "styx-blog-source",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Styx11/styx-blog-source.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Styx11/styx-blog-source/issues"
+  },
+  "homepage": "https://github.com/Styx11/styx-blog-source#readme"
+}
