@@ -9,7 +9,7 @@ module.exports = {
       { text: 'Home', link: '/' },
       { 
         text: 'Blog',
-        link: '/blog/JavaScript/',
+        link: '/blog/FontEnd_Construction/ssr_first_part',
         items: [
           { text: 'JavaScipt', link: '/blog/JavaScript/' },
           { text: 'Node', link: '/blog/Node/' },
@@ -45,7 +45,8 @@ module.exports = {
         'ssr_first_part',
         'ssr_second_part',
         'ssr_third_part',
-        'devMiddleware'
+        'devMiddleware',
+        'hotMiddleware'
       ],
       '/blog/Projects/': [
         '',
