@@ -27,17 +27,19 @@ npm install webpack-hot-middleware@2.25.0 --save-dev
 
 1. 在 Webpack 配置文件中加入相关插件，它让我们可以使用 [HMR API](https://webpack.docschina.org/api/hot-module-replacement/)：
 ```js
-// lib/webpack.base.js
+// lib/webpack.dev.js
 const webpack = require('webpack');
+const merge = require('webpack-merge');
+const baseConfig = require('./webpack.base.js');
 
-module.exports = {
+module.exports = merge(baseConfig, {
   //...
 
   plugins: [
     new webpack.HotModuleReplacementPlugin(),
     //...
   ]
-}
+});
 ```
 
 2. 将`webpack-hot-middleware/client`加入客户端 Webpack 配置的入口配置（`entry`）数组中，它的作用我们之后会看到。
@@ -546,4 +548,32 @@ module.exports = function(hash, moduleMap, options) {
 ```
 我们可以清楚地看到：首先`processUpdate`通过对比 Webpack 设置的全局变量`__webpack_hash__`判断本地代码是否发生了变动，有则调用`check`函数进行更新；在`check`函数中我们调用了 HMR API——`hot.check`和`hot.apply`做了模块更新和一些额外的检查。
 
-那么我可以简单总结一下 client 源码的内容：client 订阅了 middleware 的 SSEs 服务然后传入`processMessage`作为事件回调，它会根据不同的事件执行不同代码。其中`sync`事件会让`processMessage`最终调用`processUpdate`函数，在`processUpdate`的内部它调用了 HMR API 进行了模块更新和其他的一些检查工作。
+最后我简单总结一下 client 源码的内容：client 订阅了 middleware 的 SSEs 服务然后传入`processMessage`作为事件回调，它会根据不同的事件执行不同代码。其中`sync`事件最终会让`processMessage`调用`processUpdate`函数进行模块的检查和更新。
+
+## 还有一件事
+通过上面的源码分析我们可以清楚地看到 client 是如何工作的，但还有一个问题——它是什么时候被添加到我们的客户端代码中的？我们并没有在应用里引用`client.js`啊？
+
+还记得我们之前对 Webpack 客户端配置做的修改吗？“将`webpack-hot-middleware/client`加入客户端 Webpack 配置的入口配置（`entry`）数组中”，在实际操作中我们会这么做：
+```js
+const clientConfig = require('./webpack.client.js');
+
+// hotMiddleware下不能使用[name].[chunkhash]
+clientConfig.output.filename = '[name].js';
+client.entry = ['webpack-hot-middleware/client', client.entry.app];
+```
+以上的操作意味着 Webpack 将`webpack-hot-middleware/client.js`作为一个入口文件并将它打包进我们的客户端代码中了。
+
+为了验证这一点我们先将下面的代码添加到我们的 Webpack 客户端配置里：
+```js
+optimization: {
+  // spliteChunks 相当于 CommonsChunkPlugins vendor
+  splitChunks: {
+    chunks: 'all'
+  },
+}
+```
+Webpack4 的`splitChunks`配置相当于以前的`CommonsChunkPlugins`插件，它会将第三方公用代码抽离出我们的用户代码方便浏览器进行缓存。也就是说`webpack-hot-middleware/client`的代码被打包进了`vender`里了。我们可以在浏览器的资源管理器中找到它：
+
+![vender](https://s1.ax1x.com/2020/04/30/JqBKXt.png)
+
+voilà！开发模式下 hotMiddleware client 就是这么随着我们的客户端代码一起运行的。
