@@ -35,6 +35,7 @@ const baseConfig = require('./webpack.base.js');
 module.exports = merge(baseConfig, {
   //...
 
+  // 注意：你只应该在开发模式下使用它
   plugins: [
     new webpack.HotModuleReplacementPlugin(),
     //...
@@ -86,11 +87,11 @@ const { PassThrough } = require('stream');
 router.get('/event-test', async ctx => {
   const stream = new PassThrough();
   ctx.set('Content-Type', 'text/event-stream');
-  ctx.body = stream;
   setInterval(() => {
     // 一次事件以 \n\n 为结束标识
     stream.write('data: hello\n\n');
   }, 1000);
+  ctx.body = stream;
 });
 app.use(router.routes());
 app.use(router.allowedMethods());
@@ -116,7 +117,7 @@ event.onerror((e) => {
 那么对于 hotMiddleware 来说就应该需要服务端和客户端的代码来让这一切工作起来：服务端负责在特定的时候发送事件，客户端在收到事件时检查并更新模块，接下来我们从源码的角度看看它是如何工作的。
 
 ## middleware
-在介绍之间我们先弄清一个概念，那就是我们在这里说的服务端通知客户端，这里的“客户端”指的是 hotMiddleware 创建的专门用来监听服务端事件并检查更新模块的客户端，而不是发出请求的用户。后面我们会用`client`专指这一对象。
+在介绍之间我们先弄清一个概念，我们所说的服务端通知客户端，这里的“客户端”指的是 hotMiddleware 创建的专门用来监听服务端事件并检查更新模块的客户端，而不是发出请求的用户。后面我们会用`client`专指这一对象。
 
 我们先从服务端使用的中间件主体[webpack-hot-middleware/middleware.js](https://github.com/webpack-contrib/webpack-hot-middleware/blob/v2.25.0/middleware.js)看起：
 ```js
@@ -141,6 +142,7 @@ function webpackHotMiddleware(compiler, opts) {
   compiler.hooks.done.tap('webpack-hot-middleware', onDone);
   //...
 
+  // eventStream.publish 会向客户端发生事件
   function onInvalid() {
     if (closed) return;
     latestStats = null;
@@ -288,13 +290,14 @@ function createEventStream(heartbeat) {
 ```
 由`createEventStream`工厂函数创建的`eventStream`对象会用`Content-Type: event-stream`头回复请求以创建 SSEs 服务，`publish`方法会向所有连接的 client 发送事件通知并附加一些额外的信息。这样在 client 收到通知后就可以调用回调函数检查更新模块了。在这期间它还会不断发送维持信息`data: \uD83D\uDC93\n\n`让 client 知道服务还在继续并没有中断。
 
-以上就是 hotMiddleware 作为服务端中间件的源码内容了，我们可以发现它只是做了发送事件通知 client 的工作，对我们的应用并没有什么作用，关键还是要看 client 会在事件发生时做什么。接下来我会向你介绍 hotMiddleware 在 client 里是如何影响我们的客户端应用的。
+以上就是 hotMiddleware 作为服务端中间件的源码内容了，我们可以发现它只是做了发送事件通知 client 的工作，对我们的应用并没有什么作用，关键还是要看运行在客户端的 client 会在事件发生时做什么。接下来我们看看它是如何影响我们的应用的。
 
 ## client
 
 我们从[webpack-hot-middleware/client.js](https://github.com/webpack-contrib/webpack-hot-middleware/blob/v2.25.0/client.js)看起（我会把一些非重点的代码忽略掉）：
 ```js
 // client.js
+// 运行在浏览器环境中
 /*eslint-env browser*/
 /*global __resourceQuery __webpack_public_path__*/
 
@@ -467,6 +470,7 @@ if (module) {
 // process-update.js
 /* global window __webpack_hash__ */
 
+// HMR API 由 webpack.HotModuleReplacementPlugin 插件提供
 if (!module.hot) {
   throw new Error('[HMR] Hot Module Replacement is disabled.');
 }
@@ -478,8 +482,8 @@ var applyOptions = {
   // 包含一些失败情况下的处理方法，不需要考虑细节
 };
 
-// __webpack_hash__ 是 webpack 设置的全局变量，标志着本地代码是否有变动
-// 所以这里也就是通过比对 hash 值判断是否需要更新模块
+// __webpack_hash__ 是 webpack 设置的全局变量，唯一地标识本地代码
+// 所以这里 client 通过对比 hash 值判断是否需要更新模块
 function upToDate(hash) {
   if (hash) lastHash = hash;
   return lastHash == __webpack_hash__;
@@ -561,7 +565,7 @@ const clientConfig = require('./webpack.client.js');
 clientConfig.output.filename = '[name].js';
 client.entry = ['webpack-hot-middleware/client', client.entry.app];
 ```
-以上的操作意味着 Webpack 将`webpack-hot-middleware/client.js`作为一个入口文件并将它打包进我们的客户端代码中了。
+以上的操作意味着 Webpack 会将`webpack-hot-middleware/client.js`作为一个入口文件并将它打包进我们的客户端代码中。
 
 为了验证这一点我们先将下面的代码添加到我们的 Webpack 客户端配置里：
 ```js
@@ -572,8 +576,13 @@ optimization: {
   },
 }
 ```
-Webpack4 的`splitChunks`配置相当于以前的`CommonsChunkPlugins`插件，它会将第三方公用代码抽离出我们的用户代码方便浏览器进行缓存。也就是说`webpack-hot-middleware/client`的代码被打包进了`vender`里了。我们可以在浏览器的资源管理器中找到它：
+Webpack4 的`splitChunks`配置相当于以前的`CommonsChunkPlugins`插件，它会将第三方公用代码抽离出我们的用户代码方便浏览器进行缓存。也就是说`webpack-hot-middleware/client`的代码被打包进`vender`里了。这样我们就可以很容易地在浏览器的资源管理器中找到它：
 
 ![vender](https://s1.ax1x.com/2020/04/30/JqBKXt.png)
 
-voilà！开发模式下 hotMiddleware client 就是这么随着我们的客户端代码一起运行的。
+voilà！开发模式下 hotMiddleware client 就是这样随着我们的客户端代码一起运行的。
+
+## 写在最后
+至此，hotMiddleware 源码的主要内容已经介绍完毕，总结地来说这个中间件的工作分为两部分：服务端开启 SSEs 服务并注册 Webpack 编译钩子以在合适的时候向 client 发送事件；客户端 client 订阅 SSEs 服务并在事件发生时调用 HMR API 检查和更新模块。代码虽然看着很长，但主要内容并不多，其他更多的细节读者可以自行阅读查阅源码。
+
+希望以上内容对你有所帮助，如有任何问题你可以在 github 上找到我👉[Styx](https://github.com/Styx11)
