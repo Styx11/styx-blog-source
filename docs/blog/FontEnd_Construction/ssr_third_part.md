@@ -9,7 +9,7 @@
 :::
 
 ## 前言
-通过[中篇](./ssr_second_part.md)的介绍我们将 Vue SSR 应用与 Koa2 服务器结合，并通过组合中间件提供了路由、文件服务功能。我们使用的`renderer`都是通过直接引用打包文件创建的：
+在[中篇](./ssr_second_part.md)我们介绍了将 Vue SSR 应用与 Koa2 服务器结合，并通过组合中间件提供了路由、文件服务功能。我们使用的`renderer`都是通过直接引用打包文件创建的：
 ```js
 // server.js
 const { createBundleRenderer } = require('vue-server-renderer');
@@ -91,7 +91,7 @@ isProd
 ```
 `npm run dev`会让服务器在开发模式下运行并使用中间件以提供重载功能。
 
-接下来我们添加这两个中间件的相关代码让这一切运行起来。
+接下来我们添加这两个中间件让这一切运行起来。
 
 ## devMiddleware
 `webpack-dev-middleware`是`webpack-dev-server`内部使用的中间件，它可以提供更高的灵活性并与现有的服务器结合。先来安装依赖：
@@ -286,4 +286,126 @@ Server running at localhost:8080
 打开浏览器进入地址`localhost:8080`可以看到我们客户端应用，这个时候我们随便更改一下`src`目录下应用的标签部分并保存，可以在终端看到有新的编译信息输出，同时我们刷新浏览器可以发现内容有所变化。这就是我们在这一部分的目的了——更新内容而无需重新调用编译命令，这让我们的开发变得更加高效。
 ![](https://s1.ax1x.com/2020/04/22/JNmOcn.gif)
 
-但是这样还不够，我们还是需要手动刷新浏览器并且在这个过程中应用状态会丢失，导致一切都得重新来过。这个时候模块热替换HMR（Hot Module Replacement）就可以让开发效率更上一层楼。
+但是这样还不够，我们还是需要手动刷新浏览器并且在这个过程中应用状态会丢失，导致一切都得重新来过。这个时候模块热替换 HMR（Hot Module Replacement）就可以让开发效率更上一层楼。
+
+## hotMiddleware
+Webpack 提供的 HMR API 可以让我们可以在应用的运行过程中增添、删除和替换模块以实现热重载——我们并不需要刷新浏览器所以应用的状态得以保留。
+
+在应用了`webpack-dev-middleware`的基础上我们依照`webpack-hot-middleware`的[README](https://github.com/webpack-contrib/webpack-hot-middleware/tree/v2.25.0#installation--usage)文档先简单将它添加到我们的应用中：
+```js
+// lib/devMiddleware.js
+const webpack = require('webpack');
+const clientConfig = require('../config/webpack.client.js');
+const webpackHotMiddleware = require('webpack-hot-middleware');
+//...
+
+module.exports = (app, render) => {
+  //...
+
+  // hotMiddleware 相关配置
+  // hotMiddleware 下不能使用 contentHash、chunkHash
+  client.output.filename = '[name].js';
+  client.plugins.push(new webpack.HotModuleReplacementPlugin());
+  client.entry = ['webpack-hot-middleware/client', client.entry.client];
+
+  //...
+  const clientComplier = webpack(clientConfig);
+  const clientHotMiddleware = webpackHotMiddleware(clientComplier, { heartbear: 4000 });
+
+  //...
+
+  // 目前这是无法在 Koa2 服务器上使用的
+  app.use(clientHotMiddleware);
+  
+  //...
+};
+```
+让我来对上面的内容做几点说明：首先是 hotMiddleware 下不能使用 Webpack 的`contentHash`或是`chunkHash`命名编译文件；再者由于我们没有再细分客户端开发和生产环境的 Webpack 配置，所以我们选择在这里加入`webpack.HotModuleReplacementPlugin`插件，它为我们提供了 HMR API；最后 hotMiddleware 只能在客户端使用，其中一个原因是服务端代码只能有一个入口。
+
+在 hotMiddleware [源码](https://github.com/webpack-contrib/webpack-hot-middleware/blob/v2.25.0/middleware.js)中可以看到它的工作是基于 SSEs 通信技术的，也就是说 hotMiddleware 需要以`Content-Type: event-stream`头开启 SSEs 服务以让特定的客户端订阅事件流。因为 Koa2 回复请求的主体`ctx.body`默认并不是可写流，所以我们要对它进行如下的适配：
+```js
+// lib/devMiddleware.js
+const { PassThrough } = require('stream');
+//...
+
+module.exports = (app, render) => {
+  //...
+
+  //...
+
+  // 只能在`write`方法中设置`ctx.body`否则服务器会直接返回一个`unknown`文件
+  app.use(async (ctx, next) => {
+    const stream = new PassThrough();
+    await clientHotMiddleware(ctx.req, {
+      end: stream.end.bind(stream),
+      write: content => {
+        if (!ctx.body) ctx.body = stream;
+        return stream.write(content);
+      },
+      writeHead: (status, header) {
+        ctx.status = status;
+        ctx.set(header);
+      }
+    }, next)
+  })
+};
+```
+这样我们就可以让 hotMiddleware 在 Koa2 下持续写入`eventStream`了。更多关于 hotMiddleware 的内容可以参考我写的[源码解析](./hotMiddleware.md)。
+
+我们重启服务器`npm run dev`看看模块热替换功能是否运行正常：
+
+![热替换](https://s1.ax1x.com/2020/05/01/JXh8Y9.gif)
+
+一切运行正常！更改代码后无需刷新浏览器应用就能实现更新。
+
+## template
+还有一件事，我们创建的`renderer`基于`clientManifest`和`template`，在开发模式下当 Webpack 监听的源文件——以入口文件构建的依赖图中的所有文件发生变化时我们才能够在 Webpack 编译钩子`hooks.done`里重建`renderer`，但是`template`并不在依赖图内，它不被任何源文件所引用，所以它的变动并不会触发编译钩子。我们需要额外地监听`template`文件以在它变动时重新创建`renderer`。
+
+我们选择[chokidar](https://github.com/paulmillr/chokidar)——比 Node.js 原生的`fs.watch / fs.watchFile / FSEvents`更高效的文件监听库。一个简单的例子会像下面这样：
+```js
+const chokidar = require('chokidar');
+
+const exampleWatcher = chokidar.watch('./example.js');
+exampleWatcher.on('change', path => console.log(`File ${path} has been changed`));
+```
+现在让我把它添加到开发模式下，首先安装依赖`npm install --save-dev chokidar@3.3.1`：
+```js
+// lib/devMiddleware.js
+const fs = require('fs');
+const path = require('path');
+const chokidar = require('chokidar');
+const { createBundleRenderer } = require('vue-ssr-renderer');
+//...
+
+module.exports = (app, render) => {
+  let serverBundle, clientManifest;
+  //...
+
+  const templatePath = path.resolve(__dirname, '../src/template/index.html');
+  const templateWatcher = chokidar.watch(templatePath);
+  templateWatcher.on('change', () => {
+    template = fs.readFileSync(templatePath, 'utf8');
+    render.template = template;
+    if (serverBundle && clientManifest) {
+      render.renderer = createBundleRenderer(serverBundle, {
+        template: render.template,
+        runInNewContext: false,
+        clientManifest,
+      });
+    }
+    // template is not under webpack's watch so you need to refresh browser by hand
+    // and because of browser's cache, you may need to refresh twice when you first open the page
+    console.log(`template ${templatePath} has been changed, you need to refresh the browser`);
+  });
+
+  //...
+}
+```
+我们重启服务器`npm run dev`，更改`template`的内容然后刷新浏览器就可以看到内容的变化了。
+
+注意：因为`template`不在 Webpack 的监听下，所以它无法使用 hotMiddleware 提供的热重载功能，我们需要手动刷新浏览器才能看到应用更新。
+
+## 总结
+那么 SSR 构建流程系列总结至此结束。我们在[上篇](./ssr_first_part.md)介绍了开启一个 Vue SSR 项目所需的 Webpack 配置；在[中篇](./ssr_second_part.md)看到了如何将 Vue SSR 应用与一个 Koa2 服务器结合；在这下篇我们总结了如何创建了一个基于 Koa2 和 Webpack4 的开发环境。在这个过程中我也是收获颇多，比如通过阅读中间件的源码来学习它们的工作原理。
+
+更多的细节你可以参考我的[样例库](https://github.com/Styx11/vue-ssr-base)，同样的，有任何问题你可以在 github 上找到我👉[Styx](https://github.com/Styx11)。
