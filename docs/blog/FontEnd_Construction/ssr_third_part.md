@@ -29,12 +29,14 @@ const renderer = createBundleRenderer(serverBundle, {
 另外在这个过程中我发现了解中间件在源码层面的运行方式是有必要的，所以我额外写了两篇源码解析来总结我所学到的，希望对你有所帮助：[devMiddleware 源码解析](./devMiddleware.md)、[hotMiddleware 源码解析](./hotMiddleware.md)。
 
 ## 思路
-Vue SSR 官方在[Bundle Renderer 指引](https://ssr.vuejs.org/zh/guide/bundle-renderer.html#使用基本-ssr-的问题)中为我们提供了构建开发模式的思路——读取更新后的`bundle`从而更新`renderer`。这样服务器就能使用新的`renderer`去创建静态标记并发送更新后的打包文件。这个模式之所以成立是因为`createBundleRenderer`可以使用传入的`template`和`clientManifest`自动注入关键资源和数据预取指令。例如当我们使用 Webpack 提供的`chunkhash`作为浏览器缓存策略时，编译文件的名称就会改变，这样自动注入资源就显得额外重要，并且它还提供内置的`source-map`的支持。
+Vue SSR 官方在 [Bundle Renderer 指引](https://ssr.vuejs.org/zh/guide/bundle-renderer.html#使用基本-ssr-的问题)中为我们提供了构建开发模式的思路——读取更新后的`bundle`然后重新创建`renderer`。这样服务器就能使用新的`renderer`去创建静态标记，客户端也能获取到更新后的打包文件。
 
-那么综上所述，对于服务端，我们需要在两个 Webpack 实例上注册编译钩子获取更新后的`bundle`并重新创建`renderer`；对于客户端，`webpack-dev-middleware`中间件将处理相关请求，为客户端提供更新后的`bundle`文件。
+为了做到这一点我们可以使用 Webpack 提供的[ Node.js API ](https://webpack.docschina.org/api/node/)和中间件[webpack-dev-middleware](https://github.com/webpack/webpack-dev-middleware/tree/v3.7.2)。
+
+那么首先，我们需要创建两个 Webpack 实例`complier`分别监听以`client.entry.js`和`server.entry.js`为入口的依赖文件。然后，在这两个`complier`上注册编译钩子去获取更新后的`bundle`并重新创建`renderer`。我们还需要让一个`webpack-dev-middleware`实例处理客户端请求，为浏览器提供更新后的`bundle`文件。其中`webpack-dev-middleware`会自动开启`complier`的监听模式并设置它们的文件系统。
 
 ## 准备
-现在让我们在原来的样例库中添加一个专门存放[开发模式逻辑](https://github.com/Styx11/vue-ssr-base/blob/master/lib/devMiddleware.js)的文件。因为我们需要监听供“服务端渲染”和“客户端激活”的两组文件，所以我们让它会返回一组`Promise`以便让服务器在一切准备就绪后再开始监听请求：
+现在让我们在原来的样例库中添加一个专门存放[开发模式逻辑](https://github.com/Styx11/vue-ssr-base/blob/master/lib/devMiddleware.js)的文件。因为我们需要监听供“服务端渲染”和“客户端激活”的两组文件，所以我们会让它返回一组`Promise`以便让服务器在一切准备就绪后再开始工作：
 ```js
 // lib/devMiddleware.js
 
@@ -48,7 +50,7 @@ module.exports = (app) => {
   return Promise.all([serverPromise, clientPromise]);
 };
 ```
-由于需要监听两组文件，所以我们之后会分别创建针对服务端和客户端的 devMiddleware 并在相关的编译钩子中`resolve`它们。
+我们之后会在编译完成钩子中`resolve`它们。
 
 之后在[服务端](https://github.com/Styx11/vue-ssr-base/blob/master/server.js)引用并**只**在开发模式使用它：
 ```js
@@ -89,17 +91,22 @@ isProd
 }
 //...
 ```
-`npm run dev`会让服务器在开发模式下运行并使用中间件以提供重载功能。
-
-接下来我们添加这两个中间件让这一切运行起来。
+这样`npm run dev`会让服务器在开发模式下运行 
 
 ## devMiddleware
-`webpack-dev-middleware`是`webpack-dev-server`内部使用的中间件，它可以提供更高的灵活性并与现有的服务器结合。先来安装依赖：
+`webpack-dev-middleware`是`webpack-dev-server`内部使用的中间件，它可以提供更高的灵活性方便与现有的服务器结合。它的工作主要有三个：
+1. 开启编译实例`complier`的监听模式，当文件变更时，就会重新执行编译。
+2. 设置`complier`和`webpack-dev-middleware`实例的文件系统，这样在使用`MemoryFileSystem`时就能在内存中读取到相同文件。
+3. 读取并向客户端提供编译文件——它只会处理对编译文件的请求。
+
+更多的细节可参考我写的[ devMiddleware 源码解析](./devMiddleware.md)。
+
+我们先来安装依赖：
 ```shell
 npm install webpack-dev-middleware@3.7.2 --save-dev
 ```
 
-然后仿照 Express 那样的方式创建两个用于服务端和客户端入口文件的中间件：
+然后先仿照 Express 那样的方式创建两个用于服务端和客户端入口文件的中间件：
 ```js
 // lib/devMiddleware.js
 const webpack = require('webpack');
@@ -108,10 +115,7 @@ const clientConfig = require('../config/webpack.client.js');
 const serverConfig = require('../config/webpack.server.js');
 
 module.exports = (app) => {
-  let serverRes, clientRes;
-  const serverPromise = new Promise(res => serverRes = res);
-  const clientPromise = new Promise(res => clientRes = res);
-
+  //...
   // 目前只是创建并返回中间件
   const createDevMiddleware = (complier, config) => {
     const middleware = webpackDevMiddleware(complier, {
@@ -119,25 +123,25 @@ module.exports = (app) => {
       noInfo: true
     });
 
-    //... resolve here
-
     return middleware;
   };
 
   const clientComplier = webpack(clientConfig);
   const clientDevMiddleware = createDevMiddleware(clientComplier, clientConfig);
 
+  // 只是开启服务端 complier 的监听模式，并不需要应用在 app 上
   const serverComplier = webpack(serverConfig);
-  const serverDevMiddleware = createDevMiddleware(serverComplier, serverConfig);
+  createDevMiddleware(serverComplier, serverConfig);
 
-  // 只是仿照 express 的方式，并不适用与 koa2
+  // 仿照 express 的方式，并不适用与 koa2
   app.use(clientDevMiddleware);
-  app.use(serverDevMiddleware);
 
-  return Promise.all([serverPromise, clientPromise]);
+  //...
 };
 ```
-目前这个模式并不适用于我们的 Koa2 服务器，因为通过`middleware`对象的[源码](https://github.com/webpack/webpack-dev-middleware/blob/v3.7.2/lib/middleware.js)我们可以知道 devMiddleware 内部使用的是类 Express API，直接用在服务器上会报错。所以我们做以下适配：
+有一点需要说明的是创建服务端的 devMiddleware **并不是**让他处理对编译文件的请求（服务端环境的代码肯定也不适用于客户端），只是偷了个懒想让 devMiddleware 为服务端`complier`开启监听模式并设置文件系统，这是我们后面注册编译钩子获取文件的前提。
+
+目前这个`clientDevMiddleware`并不适用于我们的 Koa2 服务器，因为通过 devMiddleware 的[源码](https://github.com/webpack/webpack-dev-middleware/blob/v3.7.2/lib/middleware.js)我们可以知道它内部使用的是类 Express API，直接用在服务器上会报错。所以我们做以下适配：
 ```js
 // lib/devMiddleware.js
 //...
@@ -171,13 +175,15 @@ module.exports = (app) => {
   //...
 }
 ```
-这个时候在开发模式下我们的服务器就可以在源码变动的时候为客户端提供更新后的打包文件了，这是第一部分。
+那么现在在开发模式下这两个`complier`就可以进入监听模式，然后在依赖文件变动时重新编译并写入磁盘或内存了。`clientDevMiddleware`也就可以为浏览器提供最新的打包文件。这是第一部分——开启监听模式同时为客户端提供更新后的编译文件，接下来我们看看怎样重新创建`renderer`让服务端可以发送更新后的静态标记。
 
-第二部分就是关键了，我们要为服务端和客户端的 Webpack 实例添加编译钩子获取更新后的`bundle`从而创建新的`render`，这也是`Promise`被`resolve`的时机：
+## doneHook
+第二部分就是关键了，我们要为这两个`complier`添加编译钩子获取更新后的`bundle`从而创建新的`renderer`，这是建立在我们使用`webpack-dev-middleware`开启了它们的监听模式的基础上的，同时也是`Promise`被`resolve`的时机。
+
+Webpack Node.js API 提供的`done`钩子会在每次编译完成时触发，这包括开启监听模式和依赖文件变动的时候，我们可以利用它去在合适的时机获取编译文件：
 ```js
 // lib/devMiddleware.js
 //...
-const fs = require('fs');
 const path = require('path');
 const { createBundleRenderer } = require('vue-server-renderer');
 
@@ -188,10 +194,11 @@ module.exports = (app, render) => {
   const serverPromise = new Promise(res => serverResolve = res);
   const clientPromise = new Promise(res => clientResolve = res);
 
-  // 因为两端都要注册钩子，所以在这里一块处理
-  const createDevMiddleware = (complier, config, side) => {
-    //...
+  //...
+  const registerDoneHook = (complier, side) => {
     const isClient = side === 'client';
+    const sPath = path.resolve(__dirname, '../dist/vue-ssr-server-bundle.json');
+    const cPath = path.resolve(__dirname, '../dist/vue-ssr-client-manifest.json');
 
     // 编译完成钩子
     complier.hooks.done.tap('renderer-rebuild', state => {
@@ -199,18 +206,11 @@ module.exports = (app, render) => {
       stats.errors.forEach(err => console.error(err));
       stats.warnings.forEach(warning => console.warn(warning));
       if (stats.errors.length) return;
-
-      // 根据 side 选择 serverBundle 或 clientManifest 路径
-      // 并使用 devMiddleware 默认的 memory-fs 内存文件系统获取编译文件
-      const sPath = path.resolve(__dirname, '../dist/vue-ssr-server-bundle.json');
-      const cPath = path.resolve(__dirname, '../dist/vue-ssr-client-manifest.json');
-
-      // 和 complier.outputFileSystem 引用同一个文件系统
-      middleware.fileSystem.readFileSync(isClient ? cPath : sPath, (err, file) => {
+      // complier 和 devMiddleware 引用的是同一个文件系统
+      complier.outputFileSystem.readFileSync(isClient ? cPath : sPath, (err, file) => {
         if (err) throw err;
-
         // 重新创建 renderer
-        // 因为要与服务端共享，所以我们将 renderer 和 template 传入一个 render 全局对象中
+        // 因为要与服务器共享，所以我们会将 renderer 和 template 传入一个 render 全局对象中
         const res = JSON.parse(file.toString());
         isClient ? clientManifest = res : serverBundle = res;
         if (clientManifest && serverBundle) {
@@ -220,7 +220,6 @@ module.exports = (app, render) => {
             runInNewContext: false
           });
         }
-
         isClient ? clientResolve() : serverResolve();
       });
     });
@@ -230,6 +229,8 @@ module.exports = (app, render) => {
   //...
 }
 ```
+我在这里使用了一个全局对象`render`来包含`renderer`、`template`，这样服务器就可以在全局使用或修改它们了
+
 紧接着修改`server.js`在开发模式下创建`renderer`的相关代码：
 ```js
 //server.js
@@ -283,7 +284,8 @@ isProd
 ℹ ｢wdm｣: Compiled successfully.
 Server running at localhost:8080
 ```
-打开浏览器进入地址`localhost:8080`可以看到我们客户端应用，这个时候我们随便更改一下`src`目录下应用的标签部分并保存，可以在终端看到有新的编译信息输出，同时我们刷新浏览器可以发现内容有所变化。这就是我们在这一部分的目的了——更新内容而无需重新调用编译命令，这让我们的开发变得更加高效。
+打开浏览器进入地址`localhost:8080`可以看到我们客户端应用，这个时候我们随便更改一下`src`目录下应用的标签部分并保存，可以在终端看到有新的编译信息输出，同时我们刷新浏览器可以发现内容有所变化。
+
 ![](https://s1.ax1x.com/2020/04/22/JNmOcn.gif)
 
 但是这样还不够，我们还是需要手动刷新浏览器并且在这个过程中应用状态会丢失，导致一切都得重新来过。这个时候模块热替换 HMR（Hot Module Replacement）就可以让开发效率更上一层楼。
