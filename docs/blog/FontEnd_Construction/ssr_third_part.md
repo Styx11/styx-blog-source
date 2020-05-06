@@ -29,14 +29,15 @@ const renderer = createBundleRenderer(serverBundle, {
 另外在这个过程中我发现了解中间件在源码层面的运行方式是有必要的，所以我额外写了两篇源码解析来总结我所学到的，希望对你有所帮助：[devMiddleware 源码解析](./devMiddleware.md)、[hotMiddleware 源码解析](./hotMiddleware.md)。
 
 ## 思路
-Vue SSR 官方在 [Bundle Renderer 指引](https://ssr.vuejs.org/zh/guide/bundle-renderer.html#使用基本-ssr-的问题)中为我们提供了构建开发模式的思路——读取更新后的`bundle`然后重新创建`renderer`。这样服务器就能使用新的`renderer`去创建静态标记，客户端也能获取到更新后的打包文件。
+我们都知道开发一个纯客户端应用的时候，可以使用 Webpack 自带的[开发模式](https://webpack.docschina.org/guides/development/#使用-webpack-dev-server)来监听本地文件的变动并实时重载客户端应用。但一个 SSR 项目的开发模式不止是要更新客户端，还包括服务器渲染静态标记所使用的`renderer`的更新，只有这样才可以成功地进行“客户端激活”。所以我们的思路应该是：
+1. 将 Webpack 中间件与现有的服务器结合以提供更新客户端应用的能力。
 
-为了做到这一点我们可以使用 Webpack 提供的[ Node.js API ](https://webpack.docschina.org/api/node/)和中间件[webpack-dev-middleware](https://github.com/webpack/webpack-dev-middleware/tree/v3.7.2)。
+2. 在 Webpack 实例上注册编译钩子读取更新后的`bundle`然后创建`renderer`。这样服务器就能使用新的`renderer`去发送静态标记。
 
-那么首先，我们需要创建两个 Webpack 实例`complier`分别监听以`client.entry.js`和`server.entry.js`为入口的依赖文件。然后，在这两个`complier`上注册编译钩子去获取更新后的`bundle`并重新创建`renderer`。我们还需要让一个`webpack-dev-middleware`实例处理客户端请求，为浏览器提供更新后的`bundle`文件。其中`webpack-dev-middleware`会自动开启`complier`的监听模式并设置它们的文件系统。
+为了做到这些我们可以使用 Webpack 提供的[ Node.js API ](https://webpack.docschina.org/api/node/)和中间件[webpack-dev-middleware](https://github.com/webpack/webpack-dev-middleware/tree/v3.7.2)。
 
 ## 准备
-现在让我们在原来的样例库中添加一个专门存放[开发模式逻辑](https://github.com/Styx11/vue-ssr-base/blob/master/lib/devMiddleware.js)的文件。因为我们需要监听供“服务端渲染”和“客户端激活”的两组文件，所以我们会让它返回一组`Promise`以便让服务器在一切准备就绪后再开始工作：
+现在让我们在原来的样例库中添加一个专门存放[开发模式逻辑](https://github.com/Styx11/vue-ssr-base/blob/master/lib/devMiddleware.js)的文件。因为我们需要监听供服务端渲染（`serverBundle`）和客户端激活（`clientManifest`）的两组文件并用它们创建`renderer`，所以我会让它返回一组`Promise`以便服务器在一切准备就绪后开始工作：
 ```js
 // lib/devMiddleware.js
 
@@ -91,7 +92,7 @@ isProd
 }
 //...
 ```
-这样`npm run dev`会让服务器在开发模式下运行 
+这样`npm run dev`就会让服务器在开发模式下运行，接下来我们先在服务器上应用 devMiddleware 中间件，再注册`complier`编译钩子。
 
 ## devMiddleware
 `webpack-dev-middleware`是`webpack-dev-server`内部使用的中间件，它可以提供更高的灵活性方便与现有的服务器结合。它的工作主要有三个：
@@ -178,13 +179,16 @@ module.exports = (app) => {
 那么现在在开发模式下这两个`complier`就可以进入监听模式，然后在依赖文件变动时重新编译并写入磁盘或内存了。`clientDevMiddleware`也就可以为浏览器提供最新的打包文件。这是第一部分——开启监听模式同时为客户端提供更新后的编译文件，接下来我们看看怎样重新创建`renderer`让服务端可以发送更新后的静态标记。
 
 ## doneHook
-第二部分就是关键了，我们要为这两个`complier`添加编译钩子获取更新后的`bundle`从而创建新的`renderer`，这是建立在我们使用`webpack-dev-middleware`开启了它们的监听模式的基础上的，同时也是`Promise`被`resolve`的时机。
+第二部分就是关键了，我们要为这两个`complier`添加编译钩子获取更新后的`serverBundle`和`clientManifest`从而创建新的`renderer`，这是建立在我们使用`webpack-dev-middleware`开启了它们的监听模式的基础上的，同时也是`Promise`被`resolve`的时机。
 
-Webpack Node.js API 提供的`done`钩子会在每次编译完成时触发，这包括开启监听模式和依赖文件变动的时候，我们可以利用它去在合适的时机获取编译文件：
+Webpack Node.js API 提供的`done`钩子会在每次编译完成时触发，这包括第一次启动开发服务器和依赖文件变动的时候，我们可以利用它去在合适的时机获取编译文件：
 ```js
 // lib/devMiddleware.js
 //...
 const path = require('path');
+const webpack = require('webpack');
+const clientConfig = require('../config/webpack.client.js');
+const serverConfig = require('../config/webpack.server.js');
 const { createBundleRenderer } = require('vue-server-renderer');
 
 // 添加 render 相关参数
@@ -225,6 +229,16 @@ module.exports = (app, render) => {
     });
     //...
   };
+
+  //...
+
+  const clientComplier = webpack(clientConfig);
+  //...
+  registerDoneHook(clientComplier, 'client');
+
+  const serverComplier = webpack(serverConfig);
+  //...
+  registerDoneHook(serverComplier, 'server');
 
   //...
 }
@@ -288,6 +302,8 @@ Server running at localhost:8080
 
 ![](https://s1.ax1x.com/2020/04/22/JNmOcn.gif)
 
+到这里这个开发模式的基本目的就达到了：不需要重新调用编译命令，服务端和客户端应用就能够进行更新。
+
 但是这样还不够，我们还是需要手动刷新浏览器并且在这个过程中应用状态会丢失，导致一切都得重新来过。这个时候模块热替换 HMR（Hot Module Replacement）就可以让开发效率更上一层楼。
 
 ## hotMiddleware
@@ -322,7 +338,7 @@ module.exports = (app, render) => {
   //...
 };
 ```
-让我来对上面的内容做几点说明：首先是 hotMiddleware 下不能使用 Webpack 的`contentHash`或是`chunkHash`命名编译文件；再者由于我们没有再细分客户端开发和生产环境的 Webpack 配置，所以我们选择在这里加入`webpack.HotModuleReplacementPlugin`插件，它为我们提供了 HMR API；最后 hotMiddleware 只能在客户端使用，其中一个原因是服务端代码只能有一个入口。
+让我来对上面的内容做几点说明：首先是 hotMiddleware 下不能使用 Webpack 的`contentHash`或是`chunkHash`命名编译文件；再者由于没有再细分客户端开发和生产环境的 Webpack 配置，所以我选择在这里加入`webpack.HotModuleReplacementPlugin`插件，它为我们提供了 HMR API；最后 hotMiddleware 只能在客户端编译实例上使用，原因是服务端代码只能有一个入口，并且它的代码是需要被打包进客户端代码中运行的。
 
 在 hotMiddleware [源码](https://github.com/webpack-contrib/webpack-hot-middleware/blob/v2.25.0/middleware.js)中可以看到它的工作是基于 SSEs 通信技术的，也就是说 hotMiddleware 需要以`Content-Type: event-stream`头开启 SSEs 服务以让特定的客户端订阅事件流。因为 Koa2 回复请求的主体`ctx.body`默认并不是可写流，所以我们要对它进行如下的适配：
 ```js
