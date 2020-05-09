@@ -340,7 +340,7 @@ module.exports = (app, render) => {
 ```
 让我来对上面的内容做几点说明：首先是 hotMiddleware 下不能使用 Webpack 的`contentHash`或是`chunkHash`命名编译文件；再者由于没有再细分客户端开发和生产环境的 Webpack 配置，所以我选择在这里加入`webpack.HotModuleReplacementPlugin`插件，它为我们提供了 HMR API；最后 hotMiddleware 只能在客户端编译实例上使用，原因是服务端代码只能有一个入口，并且它的代码是需要被打包进客户端代码中运行的。
 
-在 hotMiddleware [源码](https://github.com/webpack-contrib/webpack-hot-middleware/blob/v2.25.0/middleware.js)中可以看到它的工作是基于 SSEs 通信技术的，也就是说 hotMiddleware 需要以`Content-Type: event-stream`头开启 SSEs 服务以让特定的客户端订阅事件流。因为 Koa2 回复请求的主体`ctx.body`默认并不是可写流，所以我们要对它进行如下的适配：
+在 hotMiddleware [源码](https://github.com/webpack-contrib/webpack-hot-middleware/blob/v2.25.0/middleware.js)中可以看到它的工作是基于 SSEs 通信技术的，也就是说 hotMiddleware 需要开启 SSEs 服务以让特定的客户端订阅持续的事件流。但是因为 Koa2 回复请求的主体`ctx.body`默认并不是可写流，所以我们要对它进行如下的适配：
 ```js
 // lib/devMiddleware.js
 const { PassThrough } = require('stream');
@@ -351,7 +351,7 @@ module.exports = (app, render) => {
 
   //...
 
-  // 只能在`write`方法中设置`ctx.body`否则服务器会直接返回一个`unknown`文件
+  // 只能在 write 方法中设置 ctx.body 否则服务器会直接返回一个 unknown 文件
   app.use(async (ctx, next) => {
     const stream = new PassThrough();
     await clientHotMiddleware(ctx.req, {
@@ -368,9 +368,11 @@ module.exports = (app, render) => {
   })
 };
 ```
-这样我们就可以让 hotMiddleware 在 Koa2 下持续写入`eventStream`了。更多关于 hotMiddleware 的内容可以参考我写的[源码解析](./hotMiddleware.md)。
+关于适配我有一点需要**特别**说明：因为 hotMiddleware 内部会持续向客户端发送数据（event-stream），所以我设`ctx.body = stream`，且必须在`write`方法内设置，因为我们要先让中间件设置响应头为`text/event-stream`，否则浏览器会直接下载一个 unknown 文件。
 
-我们重启服务器`npm run dev`看看模块热替换功能是否运行正常：
+那么到这里我们就可以让 hotMiddleware 在 Koa2 下持续写入`eventStream`了。更多关于 hotMiddleware 的内容可以参考我写的[源码解析](./hotMiddleware.md)。
+
+重启服务器`npm run dev`看看模块热替换功能是否运行正常：
 
 ![热替换](https://s1.ax1x.com/2020/05/01/JXh8Y9.gif)
 
