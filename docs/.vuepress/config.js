@@ -11,9 +11,10 @@ module.exports = {
         text: 'Blog',
         link: '/blog/FontEnd_Construction/ssr_first_part',
         items: [
-          { text: 'JavaScipt', link: '/blog/JavaScript/' },
+          { text: 'Koa', link: '/blog/Koa/'},
           { text: 'Node', link: '/blog/Node/' },
-          { text: '前端构建', link: '/blog/FontEnd_Construction/' }
+          { text: '前端构建', link: '/blog/FontEnd_Construction/' },
+          { text: 'JavaScipt', link: '/blog/JavaScript/' },
         ]
       },
       { text: 'Projects', link: '/blog/Projects/' },
@@ -33,6 +34,9 @@ module.exports = {
         'es6_class_basic',
         'es6_class_extend',
         'promise_basic'
+      ],
+      '/blog/Koa/': [
+        '',
       ],
       '/blog/Node/': [
         '',
