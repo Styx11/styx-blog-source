@@ -11,7 +11,8 @@
 export default {
   props: {
     filepath: {
-      required: true
+      type: String,
+      required: true,
     }
   },
   data: () => ({
