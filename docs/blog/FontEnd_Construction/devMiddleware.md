@@ -397,3 +397,5 @@ module.exports = function ctx(compiler, options) {
 `webpack-dev-middleware`借助 `complier` 提供的编译钩子修改全局上下文`context`从而驱动自身的运作，这是它们之间的联系；在这个过程里中间件开启 Webpack 监听模式（watch mode）并修改双方存取编译文件的 fs（`complier.outputFileSystem`和`middleware.fileSystem`）使得它们可以在一致的内存块中工作，这是相互协调。如果我们需要在一个 Koa2 服务器上添加这个中间件，根据上面的介绍可以很容易的针对它使用的类 Express API 做适配，就像我的[样例库](https://github.com/Styx11/vue-ssr-base/blob/master/lib/devMiddleware.js#L36)展示的那样。
 
 以上就是这篇源码解析的全部内容了，真心希望这对你有所帮助，如果遇到任何问题你可以在 github 上找到我👉[Styx](https://github.com/Styx11)
+
+<SourceLink filepath='/FontEnd_Construction/devMiddleware.md' />

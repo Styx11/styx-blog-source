@@ -586,3 +586,5 @@ voilà！开发模式下 hotMiddleware client 就是这样随着我们的客户�
 至此，hotMiddleware 源码的主要内容已经介绍完毕，总结地来说这个中间件的工作分为两部分：服务端开启 SSEs 服务并注册 Webpack 编译钩子以在合适的时候向 client 发送事件；客户端 client 订阅 SSEs 服务并在事件发生时调用 HMR API 检查和更新模块。代码虽然看着很长，但主要内容并不多，其他更多的细节读者可以自行阅读查阅源码。
 
 希望以上内容对你有所帮助，如有任何问题你可以在 github 上找到我👉[Styx](https://github.com/Styx11)
+
+<SourceLink filepath='/FontEnd_Construction/hotMiddleware.md' />

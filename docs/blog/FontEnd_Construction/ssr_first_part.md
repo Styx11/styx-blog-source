@@ -310,3 +310,5 @@ npm run build
 所以我们直接在[`server.entry.js`](https://github.com/Styx11/vue-ssr-demo/blob/master/src/server.entry.js)里使用`commonjs2`模块语法做中间适配以解决不同模块语法的转换问题。
 
 更多请见[To v4 from v3](https://webpack.docschina.org/migrate/4/#import-and-commonjs)迁移指南。
+
+<SourceLink filepath='/FontEnd_Construction/ssr_first_part.md' />

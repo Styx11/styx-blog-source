@@ -181,3 +181,5 @@ router.use('/test2', ...)
 那么以上两篇总结就是我们在生产（production）环境下需要的基本的 Webpack4 配置和 Koa2 服务代码了，你可以参照官方文档添加更多自己需要的功能，例如`vue-router`、`vuex`、`micro-cacheing`策略等等，正如我在上篇提到的：这是一个低层次的具有普适性的结构，力求不过多地限制[样例库](https://github.com/Styx11/vue-ssr-base)的使用者。
 
 那么在下篇，将介绍我踩坑最多的开发模式的构建了，我们将借助 Webpack4 提供的中间件以便根据需求进行更多自定义设置让我们的开发更加地高效自然，这也会是这三篇总结的重点。
+
+<SourceLink filepath='/FontEnd_Construction/ssr_second_part.md' />

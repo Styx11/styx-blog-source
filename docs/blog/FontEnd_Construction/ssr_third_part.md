@@ -429,3 +429,5 @@ module.exports = (app, render) => {
 那么 SSR 构建流程系列总结至此结束。我们在[上篇](./ssr_first_part.md)介绍了开启一个 Vue SSR 项目所需的 Webpack 配置；在[中篇](./ssr_second_part.md)看到了如何将 Vue SSR 应用与一个 Koa2 服务器结合；在这下篇我们总结了如何创建了一个基于 Koa2 和 Webpack4 的开发环境。在这个过程中我也是收获颇多，比如通过阅读中间件的源码来学习它们的工作原理。
 
 更多的细节你可以参考我的[样例库](https://github.com/Styx11/vue-ssr-base)，同样的，有任何问题你可以在 github 上找到我👉[Styx](https://github.com/Styx11)。
+
+<SourceLink filepath='/FontEnd_Construction/ssr_third_part.md' />
