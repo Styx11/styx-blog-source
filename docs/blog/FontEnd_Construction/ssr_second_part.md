@@ -183,3 +183,4 @@ router.use('/test2', ...)
 那么在下篇，将介绍我踩坑最多的开发模式的构建了，我们将借助 Webpack4 提供的中间件以便根据需求进行更多自定义设置让我们的开发更加地高效自然，这也会是这三篇总结的重点。
 
 <SourceLink filepath='/FontEnd_Construction/ssr_second_part.md' />
+<LastEditTime filepath='/FontEnd_Construction/ssr_second_part.md' />

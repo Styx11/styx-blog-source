@@ -431,3 +431,4 @@ module.exports = (app, render) => {
 更多的细节你可以参考我的[样例库](https://github.com/Styx11/vue-ssr-base)，同样的，有任何问题你可以在 github 上找到我👉[Styx](https://github.com/Styx11)。
 
 <SourceLink filepath='/FontEnd_Construction/ssr_third_part.md' />
+<LastEditTime filepath='/FontEnd_Construction/ssr_third_part.md' />
