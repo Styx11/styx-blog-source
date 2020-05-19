@@ -18,7 +18,9 @@
     "url": "https://github.com/Styx11/styx-blog-source/issues"
   },
   "homepage": "https://github.com/Styx11/styx-blog-source#readme",
-  "dependencies": {},
+  "dependencies": {
+    "axios": "^0.19.2"
+  },
   "devDependencies": {
     "vuepress": "^1.3.1"
   }
