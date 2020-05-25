@@ -21,7 +21,7 @@ app.use(async ctx => {
 });
 app.listen(8080);
 ```
-用户先通过`new Koa()`初始化一个 koa 对象，然后使用`app.use`注册中间件，最后调用`app.listen`创建服务器并监听请求。
+用户先通过`new Koa()`初始化一个 koa 对象，然后使用`app.use`注册中间件，最后调用`app.listen`创建服务器并监听请求。得益于它的设计思想，koa 的源码内容主要就围绕着这两个函数展开，简单易懂。
 
 让我们从 koa 的入口开始看看它做了什么，也就是我们调用`new Koa()`时执行的代码，它在 [koa/lib/application.js](https://github.com/koajs/koa/blob/2.11.0/lib/application.js)文件中：
 ```js
@@ -169,6 +169,51 @@ function respond(ctx) {
 那么`app.callback`就是整个构造函数的核心内容了，它会返回适用于`http.createServer`方法的回调函数来处理请求，下面来一起分析它的内容。
 
 ## app.callback()
+我们再从`app.callback`的代码开始看：
+```js
+// lib/application.js
+
+const compose = require('koa-compose');
+//...
+
+module.exports = class Application extends Emitter {
+  //...
+
+  // Shorthand for:
+  // http.createServer(app.callback()).listen(...)
+  listen(...args) {
+    const server = http.createServer(this.callback());
+    return server.listen(...args);
+  }
+
+  // Return a request handler callback
+  // for node's native http server.
+  callback() {
+    // koa-compose 返回一个会从第一个中间件开始执行的函数，我们之后再看它
+    const fn = compose(this.middleware);
+
+    // 注册默认的服务端错误处理，error 事件会在中间件运行发生错误时抛出
+    if (!this.listenerCount('error')) this.on('error', this.onerror);
+
+    // 返回适用于 http.createServer() 方法的回调函数
+    const handleRequest = (req, res) => {
+      const ctx = this.createContext(req, res);
+      return this.handleRequest(ctx, fn);
+    };
+
+    return handleRequest;
+  }
+
+  //...
+};
+
+```
+可以看到`app.callback`函数一共做了三件事：
+1. 使用`koa-compose`处理`middleware`数组，返回一个能够执行中间件的函数
+2. 监听`error`事件，koa 默认会使用自带的函数在服务端输出错误
+3. 返回`handleRequest`函数来执行中间件和处理请求
+
+我们先来看一看`koa-compose`是如何处理中间件数组的，这是 koa 的一个关键技术。
 
 ## koa-compose
 
