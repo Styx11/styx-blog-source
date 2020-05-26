@@ -6,7 +6,7 @@
 **原创文章，转载请联系作者[Styx](https://github.com/Styx11)！**
 :::
 
-从这里开始我将正式向你介绍 koa 的源码内容，这篇解析重点关注 koa 在**功能上是怎样运行**的，也就是它如何注册并执行中间件、如何使用默认的错误处理，又是如何返回适用于`http.createServer`方法的回调函数来处理请求的，到了下一篇我们再看关于上下文`context`的内容。我会先总览 koa 的入口代码让读者又一个大致印象，再从关键代码开始探究它背后的原理。
+从这里开始我将正式向你介绍 koa 的源码内容，这篇解析重点关注 koa 在**功能上是怎样运行**的，也就是它如何注册并执行中间件、如何使用默认的错误处理，又是如何返回适用于`http.createServer`方法的回调函数来处理请求，到了下一篇我们再看关于上下文`context`的内容。我会先总览 koa 的入口代码让读者有一个大致印象，再从关键代码开始探究它背后的原理。
 
 我将源码的一些内容做了精简以关注它主要的内容，其中英文注释是源码作者标注的，中文注释是我额外添加的，这样可以帮助你更好地理解代码。
 
@@ -25,6 +25,7 @@ app.listen(8080);
 
 让我们从 koa 的入口开始看看它做了什么，也就是我们调用`new Koa()`时执行的代码，它在 [koa/lib/application.js](https://github.com/koajs/koa/blob/2.11.0/lib/application.js)文件中：
 ```js
+// koajs/koa/lib/application.js
 'use strict';
 
 const isGeneratorFunction = require('is-generator-function');
@@ -168,10 +169,10 @@ function respond(ctx) {
 
 那么`app.callback`就是整个构造函数的核心内容了，它会返回适用于`http.createServer`方法的回调函数来处理请求，下面来一起分析它的内容。
 
-## app.callback()
+## app.callback
 我们再从`app.callback`的代码开始看：
 ```js
-// lib/application.js
+// koajs/koa/lib/application.js
 
 const compose = require('koa-compose');
 //...
@@ -216,8 +217,58 @@ module.exports = class Application extends Emitter {
 我们先来看一看`koa-compose`是如何处理中间件数组的，这是 koa 的一个关键技术。
 
 ## koa-compose
+koa 目前使用的 koa-compose 版本是`v4.1.0`，他的代码在[koajs/compose/index.js](https://github.com/koajs/compose/blob/4.1.0/index.js)中：
+```js
+// koajs/compose/index.js
+module.exports = compose
 
-## handleRequest()
+/**
+ * Compose `middleware` returning
+ * a fully valid middleware comprised
+ * of all those which are passed.
+ */
+
+function compose (middleware) {
+  if (!Array.isArray(middleware)) throw new TypeError('Middleware stack must be an array!')
+  for (const fn of middleware) {
+    if (typeof fn !== 'function') throw new TypeError('Middleware must be composed of functions!')
+  }
+
+  // compose 会返回一个中间件签名的函数，意味着它也可作为中间件被多次处理
+  return function (context, next) {
+    // last called middleware #
+    let index = -1
+    return dispatch(0)
+
+    // dispatch 会取出序号为 i 的中间件执行
+    function dispatch (i) {
+
+      // dispatch 是个闭包，可以使用 index 和 i 做判断是否在一个中间件内调用两次 next
+      if (i <= index) return Promise.reject(new Error('next() called multiple times'))
+      index = i
+
+      // 在 v3.1.0 若用户又向 compose 返回的函数传入一个中间件并在其中调用 next 会导致无限循环
+      // 所以在这里取且只取一次最后用户传入的中间件可防止无限循环
+      // issue#60 https://github.com/koajs/compose/issues/60
+      let fn = middleware[i]
+      if (i === middleware.length) fn = next
+      if (!fn) return Promise.resolve()
+      try {
+        // 执行中间件并递归地传入 dispatch 作为它的 next 函数
+        // 这就是为什么我们可以让中间件以“类栈”的方式运行
+        return Promise.resolve(fn(context, dispatch.bind(null, i + 1)));
+      } catch (err) {
+        return Promise.reject(err)
+      }
+    }
+  }
+}
+```
+在 koa-componse 的代码中我们可以看到 koa 中间件的运行原理：koa-compose 接收中间件数组并返回一个拥有中间件签名的函数，这意味着返回的函数也可以作为中间件再一次被包装；这个函数调用一个闭包`dispatch`，这个闭包会从第一个中间件函数开始执行并用`Promise.resolve`包装，运行时它会递归地将自身传入中间件中作为`next`，这也就是为什么我们调用`next`可以去执行下一个中间件，让它们以“类栈”方式运行了。
+
+最终我们得到了一个可以执行中间件数组的函数，它会在`handleRequest`函数响应请求前被执行。`handleRequest`是 koa 用来处理请求的重要部分，下面一起来看看它。
+
+## handleRequest
 
 
 <SourceLink filepath='/Koa/koa_second_part.md' />
