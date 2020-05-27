@@ -37,7 +37,8 @@ module.exports = {
       ],
       '/blog/Koa/': [
         '',
-        'koa_second_part'
+        'koa_second_part',
+        'koa_third_part'
       ],
       '/blog/Node/': [
         '',
