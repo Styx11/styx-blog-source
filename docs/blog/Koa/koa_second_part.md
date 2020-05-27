@@ -269,6 +269,109 @@ function compose (middleware) {
 最终我们得到了一个可以执行中间件数组的函数，它会在`handleRequest`函数响应请求前被执行。`handleRequest`是 koa 用来处理请求的重要部分，下面一起来看看它。
 
 ## handleRequest
+让我们先看看`handleRequest`是如何被定义的：
+```js
+// koajs/koa/lib/application.js
+
+const compose = require('koa-compose');
+//...
+
+module.exports = class Application extends Emitter {
+  //...
+
+  // Return a request handler callback
+  // for node's native http server.
+  callback() {
+    // koa-compose 返回一个会从第一个中间件开始执行的函数，我们之后再看它
+    const fn = compose(this.middleware);
+    //...
+
+    // 返回适用于 http.createServer() 方法的回调函数
+    const handleRequest = (req, res) => {
+      const ctx = this.createContext(req, res);
+      return this.handleRequest(ctx, fn);
+    };
+
+    return handleRequest;
+  }
+
+  //...
+};
+```
+在`app.callback`中`handleRequest`会先创建 koa 上下文`ctx`，然后将上下文和处理好的中间件执行函数传入`this.handleRequest`中，让我们看看它做了什么：
+```js
+// koajs/koa/lib/application.js
+const onFinished = require('on-finished');
+const Emitter = require('events');
+const util = require('util');
+const Stream = require('stream');
+
+/**
+ * Expose `Application` class.
+ * Inherits from `Emitter.prototype`.
+ */
+module.exports = class Application extends Emitter {
+  //...
+
+  // Handle request in callback.
+  handleRequest(ctx, fnMiddleware) {
+    const res = ctx.res;
+    res.statusCode = 404;
+
+    // 这里的 ctx.onerror 才是中间件运行期间使用的错误处理函数
+    // 它会向客户端返回 404 并向服务端发送 error 事件打印错误
+    const onerror = err => ctx.onerror(err);
+    const handleResponse = () => respond(ctx);
+    onFinished(res, onerror);
+
+    // 这里我们就可以大致看到 koa 的运行流程：
+    // 先执行中间件，再调用 respond 返回响应
+    return fnMiddleware(ctx).then(handleResponse).catch(onerror);
+  }
+};
+
+// Response helper.
+function respond(ctx) {
+  const res = ctx.res;
+  let body = ctx.body;
+  const code = ctx.status;
+  //...
+
+  // status body
+  if (null == body) {
+    if (ctx.req.httpVersionMajor >= 2) {
+      body = String(code);
+    } else {
+      body = ctx.message || String(code);
+    }
+    if (!res.headersSent) {
+      ctx.type = 'text';
+      ctx.length = Buffer.byteLength(body);
+    }
+    return res.end(body);
+  }
+
+  // responses
+  // 在 ctx.body 的 setter 中已经设置过例如 context-type 和 context-length 头了
+  // 所以这里只是返回响应
+  if (Buffer.isBuffer(body)) return res.end(body);
+  if ('string' == typeof body) return res.end(body);
+  if (body instanceof Stream) return body.pipe(res);
+
+  // body: json
+  body = JSON.stringify(body);
+  if (!res.headersSent) {
+    ctx.length = Buffer.byteLength(body);
+  }
+  res.end(body);
+}
+```
+在这里我们可以清楚地看到 koa 是如何响应请求的：首先执行中间件函数，再执行`respond`利用 node 原生的`response`对象返回响应，其中它还会应用默认的错误处理函数`ctx.onerror`，我们之后在关于上下文的解析中会看到它。
+
+有一点需要说明的是我们在设置`ctx.body`的时候它的`setter`会为我们设置额外的头信息，所以在这里我们只会看到`respond`返回响应主体`body`。
+
+## 总结
+我们在这一篇总结中看到了 koa 应用的运行流程：用户通过`app.use`注册中间件并用`app.listen`开启一个服务器，其中它会在返回响应前执行中间件函数，这个过程可以说是 koa 应用的骨架核心，因为只有在它之上用户才可以利用高级语法糖处理各种各样的请求。我将在下一篇解析中向你介绍围绕 koa 上下文`context`的高层次抽象函数，它们极大简化了用户处理请求的复杂性，提高了服务器的开发效率，称得上是 koa 的“血肉”。
 
 
 <SourceLink filepath='/Koa/koa_second_part.md' />
