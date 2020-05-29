@@ -107,11 +107,155 @@ module.exports = class Application extends Emitter {
 };
 //...
 ```
-可以看到入口代码涉及上下文的内容有两点：一是创建上下文`createContext`，二是注册错误处理函数`ctx.onerror`。koa 负责的错误处理主要是做一些善后工作并向客户端返回错误，其中它还会发出事件通知用户在 koa 应用上的`error`监听函数，默认的行为是打印错误信息。`createContext`函数除了创建上下文对象外，还会将原生的 node 对象赋值到 koa 的`response`和`request`上，它们会被用来提供抽象函数。
+可以看到入口代码涉及上下文的内容有两点：一是创建上下文`createContext`，二是注册错误处理函数`ctx.onerror`。koa 负责的错误处理主要是做一些善后工作并向客户端返回错误，其中它还会发出事件通知用户在 koa 应用上的`error`监听函数，默认的行为是打印错误信息。`createContext`函数除了创建上下文对象外，还会将原生的 node 对象赋值到 koa 的`response`和`request`上，它们会被用来提供代理和抽象函数。
 
-接下来我们以`context`为入口，看看它是如何代理 koa 对象让用户可以直接访问的。
+接下来我们以`context`为入口，看看它的错误处理和代理是如何工作。
 
 ## context
+上下文代码在[koajs/koa/lib/context.js](https://github.com/koajs/koa/blob/2.11.0/lib/context.js)：
+```js
+'use strict';
+const util = require('util');
+const createError = require('http-errors');
+const httpAssert = require('http-assert');
+const delegate = require('delegates');
+const statuses = require('statuses');
+const Cookies = require('cookies');
+
+const COOKIES = Symbol('context#cookies');
+
+// Context prototype.
+const proto = module.exports = {
+  //...
+
+  // Default error handling.
+  // 默认错误处理，这和用户配置的错误处理是不同的
+  onerror(err) {
+    // don't do anything if there is no error.
+    // this allows you to pass `this.onerror`
+    // to node-style callbacks.
+    if (null == err) return;
+    if (!(err instanceof Error)) err = new Error(util.format('non-error thrown: %j', err));
+
+    // 发出 error 事件，在服务端打印错误
+    this.app.emit('error', err, this);
+    //...
+
+    // 在 application 中设置的原生 node 对象
+    const { res } = this;
+
+    // first unset all headers
+    // 发生错误，移除所有头部
+    if (typeof res.getHeaderNames === 'function') {
+      res.getHeaderNames().forEach(name => res.removeHeader(name));
+    } else {
+      res._headers = {}; // Node < 7.7
+    }
+
+    // then set those specified
+    // 设置错误信息头部
+    this.set(err.headers);
+
+    // force text/plain
+    this.type = 'text';
+
+    // ENOENT support
+    if ('ENOENT' == err.code) err.status = 404;
+
+    // default to 500
+    if ('number' != typeof err.status || !statuses[err.status]) err.status = 500;
+
+    // respond
+    // 响应错误信息
+    const code = statuses[err.status];
+    const msg = err.expose ? err.message : code;
+    this.status = err.status;
+    this.length = Buffer.byteLength(msg);
+    res.end(msg);
+  },
+
+  // cookies 相关函数
+  get cookies() {
+    if (!this[COOKIES]) {
+      this[COOKIES] = new Cookies(this.req, this.res, {
+        keys: this.app.keys,
+        secure: this.request.secure
+      });
+    }
+    return this[COOKIES];
+  },
+
+  set cookies(_cookies) {
+    this[COOKIES] = _cookies;
+  },
+
+  assert: httpAssert,
+
+  throw(...args) {
+    throw createError(...args);
+  },
+};
+
+// Response delegation.
+// delegate 将 koa 对象代理到上下文中
+// 注意，这里只是传入了目标对象字符串，说明我们需要自己设置具体对象到 proto 上
+// 也就是 createContext 设置的 context.response = response
+delegate(proto, 'response')
+  .method('attachment')
+  .method('redirect')
+  .method('remove')
+  .method('vary')
+  .method('has')
+  .method('set')
+  .method('append')
+  .method('flushHeaders')
+  .access('status')
+  .access('message')
+  .access('body')
+  .access('length')
+  .access('type')
+  .access('lastModified')
+  .access('etag')
+  .getter('headerSent')
+  .getter('writable');
+
+// Request delegation.
+delegate(proto, 'request')
+  .method('acceptsLanguages')
+  .method('acceptsEncodings')
+  .method('acceptsCharsets')
+  .method('accepts')
+  .method('get')
+  .method('is')
+  .access('querystring')
+  .access('idempotent')
+  .access('socket')
+  .access('search')
+  .access('method')
+  .access('query')
+  .access('path')
+  .access('url')
+  .access('accept')
+  .getter('origin')
+  .getter('href')
+  .getter('subdomains')
+  .getter('protocol')
+  .getter('host')
+  .getter('hostname')
+  .getter('URL')
+  .getter('header')
+  .getter('headers')
+  .getter('secure')
+  .getter('stale')
+  .getter('fresh')
+  .getter('ips')
+  .getter('ip');
+```
+可以看到上下文的代码分为两部分：一部分是`context`本身提供的函数，比如错误处理、断言、cookie 等；另一部分就是利用`delegate`代理 koa 的`response`和`request`对象，让用户可以直接通过`context`去访问。
+
+第一部分我们主要看错误处理`ctx.onerror`，它首先会发出`error`事件通知应用在服务端打印错误，然后取出我们在`createContext`中设置的 node 原生对象`res`，在这个对象上`onerror`先会清除之前设置的所有头部，随后设置诸如错误信息头、内容类型、状态码之类的信息，最后向客户端响应一个错误信息。一般来说，koa 默认提供的错误处理是足以应对绝大多数的场景的，这就使得用户编写 web 应用变得更加轻松。
+
+第二部分我们从函数`delegate`开始，看看它是如何让上下文`context`代理 koa 对象的。
 
 ## node-delegate
 
