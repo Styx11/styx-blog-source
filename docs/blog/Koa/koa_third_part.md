@@ -13,7 +13,7 @@
 我将源码的一些内容做了精简以关注它主要的内容，其中英文注释是源码作者标注的，中文注释是我额外添加的，这样可以帮助你更好地理解代码。
 
 ## createContext
-我们先从创建上下文的入口文件看起，因为涉及到错误处理所以还会包含一些功能上的内容，他的代码在[koajs/koa/lib/application.js](https://github.com/koajs/koa/blob/2.11.0/lib/application.js)：
+我们先从创建上下文的入口文件看起，因为涉及到错误处理所以还会包含一些功能上的内容，它的代码在[koajs/koa/lib/application.js](https://github.com/koajs/koa/blob/2.11.0/lib/application.js)：
 ```js
 'use strict';
 const response = require('./response');
@@ -258,6 +258,77 @@ delegate(proto, 'request')
 第二部分我们从函数`delegate`开始，看看它是如何让上下文`context`代理 koa 对象的。
 
 ## node-delegate
+我们看看上下文涉及到的几个 delegate 提供的函数，它的代码在[tj/node-delegate/index.js](https://github.com/tj/node-delegates/blob/master/index.js)：
+```js
+module.exports = Delegator;
+
+// Initialize a delegator.
+function Delegator(proto, target) {
+  if (!(this instanceof Delegator)) return new Delegator(proto, target);
+
+  // proto 是代理对象
+  this.proto = proto;
+
+  // target 是字符串，我们需要自己将目标对象赋值到 proto 同名属性上
+  this.target = target;
+  this.methods = [];
+  this.getters = [];
+  //...
+}
+
+// Delegate method `name`.
+// 访问 proto[name] 相当于访问 proto[target][name]
+// 我们在 createContext 设置过 context.response = response
+// 举例来说这里访问 context[name] 等于 context['response'][name]，即 response[name]
+Delegator.prototype.method = function(name){
+  var proto = this.proto;
+  var target = this.target;
+  this.methods.push(name);
+
+  proto[name] = function(){
+    // 因为使用 function 定义的关系，这里的 this 是运行时指向的对象，也就是 proto
+    // 如果是用箭头函数定义的，this 就会指向 delegate 实例
+    return this[target][name].apply(this[target], arguments);
+  };
+
+  return this;
+};
+
+// Delegator accessor `name`.
+Delegator.prototype.access = function(name){
+  return this.getter(name).setter(name);
+};
+
+// Delegator getter `name`.
+Delegator.prototype.getter = function(name){
+  var proto = this.proto;
+  var target = this.target;
+  this.getters.push(name);
+
+  // 非标准建议的写法，最好是 defineProperty
+  proto.__defineGetter__(name, function(){
+    return this[target][name];
+  });
+
+  return this;
+};
+
+// Delegator setter `name`.
+Delegator.prototype.setter = function(name){
+  var proto = this.proto;
+  var target = this.target;
+  this.setters.push(name);
+
+  proto.__defineSetter__(name, function(val){
+    return this[target][name] = val;
+  });
+
+  return this;
+};
+```
+我们可以看到 node-delegate 并不是直接提供一个代理对象，而是在用户定义的`proto`上设置同名 name 的函数或者 getter、setter，当用户访问`proto[name]`方法或属性时，就会访问到我们提前设置的`proto[target]`对象上，就像前面的`context.response`。有一点需要注意的是 node-delegate 代码最后的更新时间是2016年4月，所以其中的一些写法不同于现在，尤其是用`function`定义的对象方法，其中`this`会指向它运行时的对象也就是`proto`而不是 delegate 实例。
+
+了解了`context`所用的代理工具后我们就可以来看用户真正会访问到的 koa 对象了，由于它们的语法有很多，我只会挑一些平时经常会用到的，比如`response.body`、`request.url`等。
 
 ## response
 
