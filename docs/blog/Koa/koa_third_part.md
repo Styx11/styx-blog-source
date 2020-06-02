@@ -328,10 +328,190 @@ Delegator.prototype.setter = function(name){
 ```
 我们可以看到 node-delegate 并不是直接提供一个代理对象，而是在用户定义的`proto`上设置同名 name 的函数或者 getter、setter，当用户访问`proto[name]`方法或属性时，就会访问到我们提前设置的`proto[target]`对象上，就像前面的`context.response`。有一点需要注意的是 node-delegate 代码最后的更新时间是2016年4月，所以其中的一些写法不同于现在，尤其是用`function`定义的对象方法，其中`this`会指向它运行时的对象也就是`proto`而不是 delegate 实例。
 
-了解了`context`所用的代理工具后我们就可以来看用户真正会访问到的 koa 对象了，由于它们的语法有很多，我只会挑一些平时经常会用到的，比如`response.body`、`request.url`等。
+了解了`context`所用的代理工具后我们就可以来看用户真正会访问到的 koa 对象了，由于它们的语法有很多，我只会挑一些平时经常会用到的，比如`response.body`、`request.url`等，你也可以跳跃地看。
 
 ## response
+koa 的`response`对象代码在[koajs/koa/lib/response.js](https://github.com/koajs/koa/blob/2.11.0/lib/request.js)
+```js
+'use strict';
 
+const ensureErrorHandler = require('error-inject');
+const onFinish = require('on-finished');
+const statuses = require('statuses');
+const destroy = require('destroy');
+const assert = require('assert');
+const Stream = require('stream');
+//...
+
+module.exports = {
+  //...
+
+  // Return response header.
+  get header() {
+    const { res } = this;
+    return typeof res.getHeaders === 'function'
+      ? res.getHeaders()
+      : res._headers || {}; // Node < 7.7
+  },
+
+  // Return response header, alias as response.header
+  get headers() {
+    return this.header;
+  },
+
+  // Get response status code.
+  get status() {
+    return this.res.statusCode;
+  },
+
+  // Set response status code.
+  set status(code) {
+    if (this.headerSent) return;
+
+    assert(Number.isInteger(code), 'status code must be a number');
+    assert(code >= 100 && code <= 999, `invalid status code: ${code}`);
+
+    // 标记位，表示用户手动设置了 status
+    this._explicitStatus = true;
+    this.res.statusCode = code;
+    if (this.req.httpVersionMajor < 2) this.res.statusMessage = statuses[code];
+    if (this.body && statuses.empty[code]) this.body = null;
+  },
+
+  // Get response status message
+  get message() {
+    return this.res.statusMessage || statuses[this.status];
+  },
+
+  // Set response status message
+  set message(msg) {
+    this.res.statusMessage = msg;
+  },
+
+  // Get response body.
+  get body() {
+    return this._body;
+  },
+
+  // Set response body.
+  // 设置响应体 body，它会在 application 的 handleResponse 中返回给客户端
+  // 在这里它会额外地设置头信息、状态码等
+  set body(val) {
+    const original = this._body;
+    this._body = val;
+
+    // no content
+    if (null == val) {
+      if (!statuses.empty[this.status]) this.status = 204;
+      this.remove('Content-Type');
+      this.remove('Content-Length');
+      this.remove('Transfer-Encoding');
+      return;
+    }
+
+    // set the status
+    // 默认设置状态码
+    if (!this._explicitStatus) this.status = 200;
+
+    // set the content-type only if not yet set
+    // 默认设置内容类型
+    const setType = !this.has('Content-Type');
+
+    // string
+    if ('string' == typeof val) {
+      if (setType) this.type = /^\s*</.test(val) ? 'html' : 'text';
+      // 返回内容字符数
+      this.length = Buffer.byteLength(val);
+      return;
+    }
+
+    // buffer
+    if (Buffer.isBuffer(val)) {
+      if (setType) this.type = 'bin';
+      this.length = val.length;
+      return;
+    }
+
+    // stream
+    if ('function' == typeof val.pipe) {
+      onFinish(this.res, destroy.bind(null, val));
+      ensureErrorHandler(val, err => this.ctx.onerror(err));
+
+      // overwriting
+      if (null != original && original != val) this.remove('Content-Length');
+
+      if (setType) this.type = 'bin';
+      return;
+    }
+
+    // json
+    this.remove('Content-Length');
+    this.type = 'json';
+  },
+
+  //...
+
+  // Return response header.
+  // 获取头信息
+  get(field) {
+    return this.header[field.toLowerCase()] || '';
+  },
+
+  // Returns true if the header identified by name is currently set in the outgoing headers.
+  // The header name matching is case-insensitive.
+  // 返回是否含有指定头信息，它的匹配是非大小写敏感的
+  has(field) {
+    return typeof this.res.hasHeader === 'function'
+      ? this.res.hasHeader(field)
+      // Node < 7.7
+      : field.toLowerCase() in this.headers;
+  },
+
+  // Set header `field` to `val`, or pass
+  // an object of header fields.
+  // 设置头信息
+  set(field, val) {
+    if (this.headerSent) return;
+
+    if (2 == arguments.length) {
+      if (Array.isArray(val)) val = val.map(v => typeof v === 'string' ? v : String(v));
+      else if (typeof val !== 'string') val = String(val);
+      this.res.setHeader(field, val);
+    } else {
+      for (const key in field) {
+        this.set(key, field[key]);
+      }
+    }
+  },
+
+  // Append additional header `field` with value `val`.
+  append(field, val) {
+    const prev = this.get(field);
+
+    if (prev) {
+      val = Array.isArray(prev)
+        ? prev.concat(val)
+        : [prev].concat(val);
+    }
+
+    return this.set(field, val);
+  },
+
+  // Remove header `field`.
+  remove(field) {
+    if (this.headerSent) return;
+
+    this.res.removeHeader(field);
+  },
+
+  //...
+};
+```
+我挑了一些在`response`对象上经常会用到的函数和属性，头信息相关的有`header`、`set`、`append`和`remove`等，响应体相关的有`body`的 setter、getter 函数、`message`、`status`等。
+
+我们主要看`body`相关的函数，首先当 koa 在`handleResponse`中响应请求时会通过`body`的 getter 函数获取到私有变量`this._body`，也就是用户提供的内容；而当用户通过`ctx.body`设置响应体时，`body`的 setter 函数除了设置`this._body`之外，还会做一些额外的工作，比如设置`status`值、设置内容类型`Content-Type`等，其中`handleResponse`只是返回了`body`，不做额外的操作。
+
+接下来我们来看看 koa 的`request`对象。
 ## request
 
 <SourceLink filepath='/Koa/koa_third_part.md' />
