@@ -513,6 +513,75 @@ module.exports = {
 
 接下来我们来看看 koa 的`request`对象。
 ## request
+`request`相关代码在[koajs/koa/lib/request.js](https://github.com/koajs/koa/blob/2.11.0/lib/request.js)
+```js
+'use strict';
+
+const qs = require('querystring');
+const only = require('only');
+//...
+
+module.exports = {
+
+  // Return request header.
+  get header() {
+    return this.req.headers;
+  },
+
+  //...
+
+  // Return request header, alias as request.header
+  get headers() {
+    return this.req.headers;
+  },
+
+  // Get request URL.
+  get url() {
+    return this.req.url;
+  },
+  //...
+
+  // Get origin of URL.
+  get origin() {
+    return `${this.protocol}://${this.host}`;
+  },
+
+  // Get full request URL.
+  // this.originUrl 在 createContext 中被设置
+  get href() {
+    // support: `GET http://example.com/foo`
+    if (/^https?:\/\//i.test(this.originalUrl)) return this.originalUrl;
+    return this.origin + this.originalUrl;
+  },
+
+  // Get request method.
+  get method() {
+    return this.req.method;
+  },
+
+  //...
+
+  // Get request pathname.
+  get path() {
+    return parse(this.req).pathname;
+  },
+
+  // Get parsed query-string.
+  get query() {
+    const str = this.querystring;
+    const c = this._querycache = this._querycache || {};
+    return c[str] || (c[str] = qs.parse(str));
+  },
+
+  //...
+};
+```
+我们并没有必要将所有函数一一列举出来，这里只是展示 koa 是如何在原有的 node 对象上做抽象的，所以读者可以根据需要自行查阅相关代码。
+
+## 总结
+那么至此 koa 源码解析系列到此结束，我们从两个方面分析了 koa 这个 web 框架是如何工作的，功能上 koa 是如何执行中间件、如何创建服务器；内容上，koa 的上下文对象`context`如何提供高层次的抽象函数。得益于它的设计思想，koa 的代码结构清晰且内容简洁，非常利于我们学习。这种“低层次”的代码设计也可以应用于我们今后的项目开发中，这会让我们的代码易于维护并且具有极高的可拓展性。
+
+真心希望这三篇源码解析对你有所帮助，如果遇到任何问题你可以在 github 上找到我👉[Styx](https://github.com/Styx11)
 
 <SourceLink filepath='/Koa/koa_third_part.md' />
 <LastEditTime filepath='/Koa/koa_third_part.md' />
